@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from git import Repo
+from typer.testing import CliRunner
 
 from path_sync._internal import git_ops
 from path_sync._internal.cmd_copy import (
@@ -23,11 +24,15 @@ from path_sync._internal.models import (
     SyncMode,
     VerifyConfig,
     VerifyStep,
+    resolve_config_path,
 )
 from path_sync._internal.repo_utils import ensure_repo
+from path_sync._internal.typer_app import app
 from path_sync._internal.verify import VerifyStatus, run_verify_steps
+from path_sync._internal.yaml_utils import dump_yaml_model
 
 CONFIG_NAME = "test-config"
+runner = CliRunner()
 
 
 def _make_dest(**kwargs) -> Destination:
@@ -641,3 +646,310 @@ def test_copy_hint_absent_for_opted_out_only(capsys, tmp_path):
     (dest_root / "justfile").write_text("opted out")
     _print_dest_only_hint(config, dest, src_root, dest_root)
     assert capsys.readouterr().err == ""
+
+
+def _write_config(src_root: Path, config: SrcConfig) -> None:
+    config_path = resolve_config_path(src_root, config.name)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(dump_yaml_model(config))
+
+
+def _init_dest(tmp_path: Path, name: str) -> Path:
+    dest_root = tmp_path / name
+    dest_root.mkdir()
+    Repo.init(dest_root)
+    return dest_root
+
+
+def _invoke_copy(src_root: Path):
+    args = ["copy", "-n", CONFIG_NAME, "--src-root", str(src_root)]
+    return runner.invoke(app, [*args, "--local", "--no-checkout", "--no-prompt", "--detailed-exit-code"])
+
+
+TABLES_SRC = """\
+# === DO_NOT_EDIT: path-sync tables ===
+[alpha]
+a = 1
+# === OK_EDIT: path-sync tables ===
+
+# === DO_NOT_EDIT: path-sync tables ===
+[beta]
+b = 2
+# === OK_EDIT: path-sync tables ===
+
+# === DO_NOT_EDIT: path-sync tables ===
+[gamma]
+c = 3
+# === OK_EDIT: path-sync tables ===
+"""
+
+TABLES_DEST_OWN_CONTENT = """\
+# dest preamble
+# === DO_NOT_EDIT: path-sync tables ===
+[alpha]
+a = 0
+# === OK_EDIT: path-sync tables ===
+# dest between parts
+# === DO_NOT_EDIT: path-sync tables ===
+[beta]
+b = 0
+# === OK_EDIT: path-sync tables ===
+
+# === DO_NOT_EDIT: path-sync tables ===
+[gamma]
+c = 0
+# === OK_EDIT: path-sync tables ===
+# dest trailer
+"""
+
+TABLES_DEST_OWN_CONTENT_SYNCED = """\
+# dest preamble
+# === DO_NOT_EDIT: path-sync tables ===
+[alpha]
+a = 1
+# === OK_EDIT: path-sync tables ===
+# dest between parts
+# === DO_NOT_EDIT: path-sync tables ===
+[beta]
+b = 2
+# === OK_EDIT: path-sync tables ===
+
+# === DO_NOT_EDIT: path-sync tables ===
+[gamma]
+c = 3
+# === OK_EDIT: path-sync tables ===
+# dest trailer
+"""
+
+
+def test_copy_twice_second_run_reports_no_changes(tmp_path, tmp_repo):
+    """One section id repeated around several blocks (parts), with and without dest-owned content."""
+    (tmp_repo / "settings.toml").write_text(TABLES_SRC)
+    (tmp_repo / "plain.py").write_text("print('hello')\n")
+    config = SrcConfig(
+        name=CONFIG_NAME,
+        paths=[PathMapping(src_path="settings.toml"), PathMapping(src_path="plain.py")],
+        destinations=[
+            _make_dest(name="fresh", dest_path_relative="../fresh"),
+            _make_dest(name="custom", dest_path_relative="../custom"),
+        ],
+    )
+    _write_config(tmp_repo, config)
+    fresh_root = _init_dest(tmp_path, "fresh")
+    custom_root = _init_dest(tmp_path, "custom")
+    custom_settings = custom_root / "settings.toml"
+    custom_settings.write_text(add_header(TABLES_DEST_OWN_CONTENT, custom_settings, CONFIG_NAME))
+
+    first = _invoke_copy(tmp_repo)
+
+    assert first.exit_code == 1
+    fresh_settings = fresh_root / "settings.toml"
+    assert fresh_settings.read_text() == add_header(TABLES_SRC, fresh_settings, CONFIG_NAME)
+    assert custom_settings.read_text() == add_header(TABLES_DEST_OWN_CONTENT_SYNCED, custom_settings, CONFIG_NAME)
+    synced_files = [root / name for root in (fresh_root, custom_root) for name in ("settings.toml", "plain.py")]
+    assert all(has_header(path.read_text()) for path in synced_files)
+    after_first = {path: path.read_bytes() for path in synced_files}
+
+    second = _invoke_copy(tmp_repo)
+
+    assert second.exit_code == 0
+    assert {path: path.read_bytes() for path in synced_files} == after_first
+
+
+def test_sync_with_sections_skips_opted_out_file(tmp_path):
+    """A dest file without the header is left alone even if it has matching fences."""
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    src_root.mkdir()
+    dest_root.mkdir()
+
+    src_content = """\
+# === DO_NOT_EDIT: path-sync standard ===
+new recipe
+# === OK_EDIT: path-sync standard ==="""
+    (src_root / "file.sh").write_text(src_content)
+
+    dest_file = dest_root / "file.sh"
+    dest_file.write_text(
+        """\
+# === DO_NOT_EDIT: path-sync standard ===
+old recipe
+# === OK_EDIT: path-sync standard ===
+# my custom stuff"""
+    )
+    before = dest_file.read_bytes()
+
+    mapping = PathMapping(src_path="file.sh")
+    changes, _ = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, False)
+
+    assert changes == 0
+    assert dest_file.read_bytes() == before
+
+
+def test_sync_with_sections_force_overwrite_syncs_opted_out_file(tmp_path):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    src_root.mkdir()
+    dest_root.mkdir()
+
+    src_content = """\
+# === DO_NOT_EDIT: path-sync standard ===
+new recipe
+# === OK_EDIT: path-sync standard ==="""
+    (src_root / "file.sh").write_text(src_content)
+
+    dest_file = dest_root / "file.sh"
+    dest_file.write_text(
+        """\
+# === DO_NOT_EDIT: path-sync standard ===
+old recipe
+# === OK_EDIT: path-sync standard ===
+# my custom stuff"""
+    )
+
+    mapping = PathMapping(src_path="file.sh")
+    changes, _ = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, True)
+
+    assert changes == 1
+    result = dest_file.read_text()
+    assert has_header(result)
+    assert "new recipe" in result
+    assert "old recipe" not in result
+    assert "# my custom stuff" in result
+
+
+def test_include_groups_write_only_named_groups(tmp_path, tmp_repo):
+    for name in ("common.py", "lint.py", "docs.py"):
+        (tmp_repo / name).write_text(f"# {name}\n")
+    config = SrcConfig(
+        name=CONFIG_NAME,
+        paths=[PathMapping(src_path="common.py")],
+        path_groups={
+            "lint": [PathMapping(src_path="lint.py")],
+            "docs": [PathMapping(src_path="docs.py")],
+        },
+        destinations=[
+            _make_dest(name="lint-only", dest_path_relative="../lint-only", include_groups=["lint"]),
+            _make_dest(name="docs-only", dest_path_relative="../docs-only", include_groups=["docs"]),
+            _make_dest(name="no-groups", dest_path_relative="../no-groups"),
+        ],
+    )
+    _write_config(tmp_repo, config)
+    dest_roots = {dest.name: _init_dest(tmp_path, dest.name) for dest in config.destinations}
+
+    result = _invoke_copy(tmp_repo)
+
+    assert result.exit_code == 1
+    written = {name: sorted(path.name for path in root.glob("*.py")) for name, root in dest_roots.items()}
+    assert written == {
+        "lint-only": ["common.py", "lint.py"],
+        "docs-only": ["common.py", "docs.py"],
+        "no-groups": ["common.py"],
+    }
+
+
+def test_replace_mode_overwrites_file_with_unknown_comment_syntax(tmp_path):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    src_root.mkdir()
+    dest_root.mkdir()
+
+    hook = "#!/bin/sh\nexit 0\n"
+    (src_root / "pre-commit").write_text(hook)
+    (dest_root / "pre-commit").write_text("#!/bin/sh\nexit 1\n")
+
+    mapping = PathMapping(src_path="pre-commit", sync_mode=SyncMode.REPLACE)
+    changes, _ = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, False)
+
+    assert changes == 1
+    assert (dest_root / "pre-commit").read_text() == hook
+
+
+@pytest.mark.parametrize("filename", ["pre-commit", "snippets.code-snippets"])
+def test_sync_mode_skips_file_with_unknown_comment_syntax(tmp_path, caplog, filename):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    src_root.mkdir()
+    dest_root.mkdir()
+
+    (src_root / filename).write_text("#!/bin/sh\nexit 0\n")
+
+    mapping = PathMapping(src_path=filename)
+    with caplog.at_level("WARNING"):
+        changes, _ = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, False)
+
+    assert changes == 0
+    assert not (dest_root / filename).exists()
+    assert "No comment config" in caplog.text
+
+
+def test_sync_deletes_extra_dest_parts(tmp_path, caplog):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    src_root.mkdir()
+    dest_root.mkdir()
+
+    src_content = """\
+# === DO_NOT_EDIT: path-sync tables ===
+[alpha]
+a = 1
+# === OK_EDIT: path-sync tables ==="""
+    (src_root / "settings.toml").write_text(src_content)
+
+    dest_file = dest_root / "settings.toml"
+    dest_file.write_text(
+        add_header(
+            """\
+# dest preamble
+# === DO_NOT_EDIT: path-sync tables ===
+[alpha]
+a = 0
+# === OK_EDIT: path-sync tables ===
+
+# === DO_NOT_EDIT: path-sync tables ===
+[beta]
+b = 0
+# === OK_EDIT: path-sync tables ===
+# dest trailer""",
+            dest_file,
+            CONFIG_NAME,
+        )
+    )
+
+    mapping = PathMapping(src_path="settings.toml")
+    with caplog.at_level("WARNING"):
+        changes, _ = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, False)
+
+    assert changes == 1
+    result = dest_file.read_text()
+    assert has_header(result)
+    assert "a = 1" in result
+    assert "a = 0" not in result
+    assert "[beta]" not in result
+    assert "b = 0" not in result
+    assert result.count("DO_NOT_EDIT: path-sync tables") == 1
+    assert "# dest preamble" in result
+    assert "# dest trailer" in result
+    assert "Deleting extra dest part 1 for section 'tables'" in caplog.text
+
+
+def test_sync_creates_missing_dest_file_in_new_folder_with_header(tmp_path):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    (src_root / ".github/workflows").mkdir(parents=True)
+    dest_root.mkdir()
+
+    src_content = """\
+# === DO_NOT_EDIT: path-sync standard ===
+name: ci
+# === OK_EDIT: path-sync standard ==="""
+    (src_root / ".github/workflows/ci.yml").write_text(src_content)
+
+    mapping = PathMapping(src_path=".github/workflows/ci.yml")
+    changes, synced = _sync_path(mapping, src_root, dest_root, _make_dest(), CONFIG_NAME, False, False)
+
+    dest_file = dest_root / ".github/workflows/ci.yml"
+    assert changes == 1
+    assert synced == {dest_file}
+    assert dest_file.read_text() == add_header(src_content, dest_file, CONFIG_NAME)
+    assert dest_file.read_text().startswith(f"# path-sync copy -n {CONFIG_NAME}\n")
