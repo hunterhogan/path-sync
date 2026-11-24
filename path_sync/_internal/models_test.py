@@ -3,11 +3,14 @@ from pathlib import Path
 import pytest
 
 from path_sync._internal.models import (
+    DEFAULT_EXCLUDE_DIRS,
     Destination,
+    HeaderConfig,
     PathMapping,
     PRDefaults,
     SrcConfig,
     SyncMetadata,
+    SyncMode,
     parse_sync_metadata,
     pr_already_synced,
 )
@@ -80,17 +83,65 @@ def test_validation_rejects_duplicate_group():
         )
 
 
-def test_null_destinations_loads_as_empty(tmp_path: Path):
-    config_yaml = """
-name: t
-paths:
-  - src_path: a.txt
-destinations:
-"""
+def _load(tmp_path: Path, config_yaml: str) -> SrcConfig:
     config_path = tmp_path / "test.src.yaml"
     config_path.write_text(config_yaml)
-    config = load_yaml_model(config_path, SrcConfig)
-    assert config.destinations == []
+    return load_yaml_model(config_path, SrcConfig)
+
+
+@pytest.mark.parametrize(
+    ("field", "default"),
+    [
+        pytest.param("paths", [], id="paths"),
+        pytest.param("path_groups", {}, id="path_groups"),
+        pytest.param("destinations", [], id="destinations"),
+        pytest.param("header_config", HeaderConfig(), id="header_config"),
+        pytest.param("pr_defaults", PRDefaults(), id="pr_defaults"),
+    ],
+)
+def test_null_src_config_field_loads_as_default(tmp_path: Path, field: str, default: object):
+    config = _load(tmp_path, f"name: t\n{field}:\n")
+    assert getattr(config, field) == default
+
+
+@pytest.mark.parametrize(
+    ("field", "default"),
+    [
+        pytest.param("include_groups", [], id="include_groups"),
+        pytest.param("skip_sections", {}, id="skip_sections"),
+        pytest.param("skip_file_patterns", set(), id="skip_file_patterns"),
+    ],
+)
+def test_null_destination_field_loads_as_default(tmp_path: Path, field: str, default: object):
+    config = _load(tmp_path, f"name: t\ndestinations:\n  - name: d\n    dest_path_relative: ../d\n    {field}:\n")
+    assert getattr(config.destinations[0], field) == default
+
+
+@pytest.mark.parametrize(
+    ("field", "default"),
+    [
+        pytest.param("dest_path", "", id="dest_path"),
+        pytest.param("sync_mode", SyncMode.SYNC, id="sync_mode"),
+        pytest.param("exclude_dirs", DEFAULT_EXCLUDE_DIRS, id="exclude_dirs"),
+        pytest.param("exclude_file_patterns", set(), id="exclude_file_patterns"),
+    ],
+)
+def test_null_path_mapping_field_loads_as_default(tmp_path: Path, field: str, default: object):
+    config = _load(tmp_path, f"name: t\npaths:\n  - src_path: a.txt\n    {field}:\n")
+    assert getattr(config.paths[0], field) == default
+
+
+@pytest.mark.parametrize(
+    "config_yaml",
+    [
+        pytest.param("name:\n", id="src_config_name"),
+        pytest.param("name: t\ndestinations:\n  - name: d\n    dest_path_relative:\n", id="dest_path_relative"),
+        pytest.param("name: t\npaths:\n  - src_path:\n", id="src_path"),
+    ],
+)
+def test_null_required_field_still_errors(tmp_path: Path, config_yaml: str):
+    with pytest.raises(ValueError, match="Input should be a valid string"):
+        _load(tmp_path, config_yaml)
 
 
 def test_parse_sync_metadata_from_default_template():

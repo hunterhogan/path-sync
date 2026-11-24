@@ -5,9 +5,10 @@ import glob as glob_mod
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar, NamedTuple
+from typing import ClassVar, NamedTuple, get_args
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
+from pydantic.fields import FieldInfo
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -71,7 +72,22 @@ class VerifyConfig(BaseModel):
     steps: list[VerifyStep] = Field(default_factory=list)
 
 
-class PathMapping(BaseModel):
+def _null_means_default(field: FieldInfo | None) -> bool:
+    return field is not None and not field.is_required() and type(None) not in get_args(field.annotation)
+
+
+class NullAsDefaultBase(BaseModel):
+    """A YAML key with no value is null: treat it as absent when the field has a default and does not accept None."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_null_for_default_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        return {k: v for k, v in data.items() if v is not None or not _null_means_default(cls.model_fields.get(k))}
+
+
+class PathMapping(NullAsDefaultBase):
     src_path: str
     dest_path: str = ""
     sync_mode: SyncMode = SyncMode.SYNC
@@ -185,7 +201,7 @@ class PRDefaults(PRFieldsBase):
         return body
 
 
-class Destination(BaseModel):
+class Destination(NullAsDefaultBase):
     name: str
     repo_url: str = ""
     dest_path_relative: str
@@ -206,7 +222,7 @@ class Destination(BaseModel):
         return self.verify if self.verify is not None else (fallback or VerifyConfig())
 
 
-class SrcConfig(BaseModel):
+class SrcConfig(NullAsDefaultBase):
     CONFIG_EXT: ClassVar[str] = ".src.yaml"
 
     name: str
@@ -223,11 +239,6 @@ class SrcConfig(BaseModel):
     auto_merge: AutoMergeConfig | None = None
     keep_pr_on_no_changes: bool = False
     force_resync: bool = False
-
-    @field_validator("destinations", mode="before")
-    @classmethod
-    def _null_destinations_as_empty(cls, value: object) -> object:
-        return [] if value is None else value
 
     @model_validator(mode="after")
     def _validate_include_groups(self) -> SrcConfig:
