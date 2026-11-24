@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,8 @@ from path_sync._internal.models import (
     DEFAULT_EXCLUDE_DIRS,
     Destination,
     HeaderConfig,
+    MergeMethod,
+    OnFailStrategy,
     PathMapping,
     PRDefaults,
     SrcConfig,
@@ -132,11 +135,74 @@ def test_null_path_mapping_field_loads_as_default(tmp_path: Path, field: str, de
 
 
 @pytest.mark.parametrize(
+    ("config_yaml", "get_value", "default"),
+    [
+        pytest.param(
+            "name: t\nauto_merge:\n  method:\n",
+            lambda c: c.auto_merge.method,
+            MergeMethod.MERGE,
+            id="auto_merge.method",
+        ),
+        pytest.param(
+            "name: t\nheader_config:\n  comment_prefixes:\n",
+            lambda c: c.header_config.comment_prefixes,
+            {},
+            id="header_config.comment_prefixes",
+        ),
+        pytest.param(
+            "name: t\nheader_config:\n  comment_suffixes:\n",
+            lambda c: c.header_config.comment_suffixes,
+            {},
+            id="header_config.comment_suffixes",
+        ),
+        pytest.param(
+            "name: t\npr_defaults:\n  labels:\n",
+            lambda c: c.pr_defaults.labels,
+            [],
+            id="pr_defaults.labels",
+        ),
+        pytest.param(
+            "name: t\npr_defaults:\n  title:\n",
+            lambda c: c.pr_defaults.title,
+            PRDefaults().title,
+            id="pr_defaults.title",
+        ),
+        pytest.param(
+            "name: t\nverify:\n  on_fail:\n",
+            lambda c: c.verify.on_fail,
+            OnFailStrategy.WARN,
+            id="verify.on_fail",
+        ),
+        pytest.param(
+            "name: t\nverify:\n  steps:\n",
+            lambda c: c.verify.steps,
+            [],
+            id="verify.steps",
+        ),
+        pytest.param(
+            "name: t\nverify:\n  steps:\n    - run: just fmt\n      commit:\n        message: m\n        add_paths:\n",
+            lambda c: c.verify.steps[0].commit.add_paths,
+            ["."],
+            id="verify.steps.commit.add_paths",
+        ),
+    ],
+)
+def test_null_nested_field_loads_as_default(
+    tmp_path: Path, config_yaml: str, get_value: Callable[[SrcConfig], object], default: object
+):
+    assert get_value(_load(tmp_path, config_yaml)) == default
+
+
+@pytest.mark.parametrize(
     "config_yaml",
     [
         pytest.param("name:\n", id="src_config_name"),
         pytest.param("name: t\ndestinations:\n  - name: d\n    dest_path_relative:\n", id="dest_path_relative"),
         pytest.param("name: t\npaths:\n  - src_path:\n", id="src_path"),
+        pytest.param("name: t\nverify:\n  steps:\n    - run:\n", id="verify_step_run"),
+        pytest.param(
+            "name: t\nverify:\n  steps:\n    - run: just fmt\n      commit:\n        message:\n", id="commit_message"
+        ),
     ],
 )
 def test_null_required_field_still_errors(tmp_path: Path, config_yaml: str):

@@ -37,7 +37,22 @@ class MergeMethod(StrEnum):
     REBASE = "rebase"
 
 
-class AutoMergeConfig(BaseModel):
+def _null_means_default(field: FieldInfo | None) -> bool:
+    return field is not None and not field.is_required() and type(None) not in get_args(field.annotation)
+
+
+class NullAsDefaultBase(BaseModel):
+    """A YAML key with no value is null: treat it as absent when the field has a default and does not accept None."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_null_for_default_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        return {k: v for k, v in data.items() if v is not None or not _null_means_default(cls.model_fields.get(k))}
+
+
+class AutoMergeConfig(NullAsDefaultBase):
     method: MergeMethod = MergeMethod.MERGE
     delete_branch: bool = True
     poll_interval_seconds: int = 30
@@ -56,35 +71,20 @@ class OnFailStrategy(StrEnum):
     WARN = "warn"
 
 
-class CommitConfig(BaseModel):
+class CommitConfig(NullAsDefaultBase):
     message: str
     add_paths: list[str] = Field(default_factory=lambda: ["."])
 
 
-class VerifyStep(BaseModel):
+class VerifyStep(NullAsDefaultBase):
     run: str
     commit: CommitConfig | None = None
     on_fail: OnFailStrategy | None = None
 
 
-class VerifyConfig(BaseModel):
+class VerifyConfig(NullAsDefaultBase):
     on_fail: OnFailStrategy = OnFailStrategy.WARN
     steps: list[VerifyStep] = Field(default_factory=list)
-
-
-def _null_means_default(field: FieldInfo | None) -> bool:
-    return field is not None and not field.is_required() and type(None) not in get_args(field.annotation)
-
-
-class NullAsDefaultBase(BaseModel):
-    """A YAML key with no value is null: treat it as absent when the field has a default and does not accept None."""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_null_for_default_fields(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        return {k: v for k, v in data.items() if v is not None or not _null_means_default(cls.model_fields.get(k))}
 
 
 class PathMapping(NullAsDefaultBase):
@@ -145,7 +145,7 @@ def pr_already_synced(pr_body: str | None, commit_ts: str) -> SyncMetadata | Non
     return None
 
 
-class HeaderConfig(BaseModel):
+class HeaderConfig(NullAsDefaultBase):
     comment_prefixes: dict[str, str] = Field(default_factory=dict)
     comment_suffixes: dict[str, str] = Field(default_factory=dict)
 
@@ -165,7 +165,7 @@ Synced from [{src_repo_name}]({src_repo_url}) @ `{src_sha_short}` ({src_commit_t
 """
 
 
-class PRFieldsBase(BaseModel):
+class PRFieldsBase(NullAsDefaultBase):
     """Common PR fields shared by copy and dep-update commands."""
 
     labels: list[str] = Field(default_factory=list)
