@@ -34,13 +34,21 @@ class VerifyResult:
     failures: list[StepFailure] = field(default_factory=list)
 
 
+def _command_prefix(cmd: str) -> str:
+    """First token of cmd for log lines; a quoted program path keeps its spaces and loses its quotes."""
+    cmd = cmd.strip()
+    if cmd[:1] in {'"', "'"} and (end := cmd.find(cmd[0], 1)) != -1:
+        return cmd[1:end]
+    return cmd.split()[0] if cmd else ""
+
+
 def run_command(cmd: str, cwd: Path, dry_run: bool = False) -> None:
     if dry_run:
         logger.info(f"[DRY RUN] Would run: {cmd} from {cwd}")
         return
     logger.info(f"Running: {cmd}")
     result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, check=False)
-    prefix = cmd.split()[0]
+    prefix = _command_prefix(cmd)
     for line in result.stdout.strip().splitlines():
         logger.info(f"[{prefix}] {line}")
     for line in result.stderr.strip().splitlines():
