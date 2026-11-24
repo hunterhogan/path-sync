@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, NamedTuple
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -223,6 +223,11 @@ class SrcConfig(BaseModel):
     auto_merge: AutoMergeConfig | None = None
     keep_pr_on_no_changes: bool = False
     force_resync: bool = False
+
+    @field_validator("destinations", mode="before")
+    @classmethod
+    def _null_destinations_as_empty(cls, value: object) -> object:
+        return [] if value is None else value
 
     @model_validator(mode="after")
     def _validate_include_groups(self) -> SrcConfig:

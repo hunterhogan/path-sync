@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from path_sync._internal.models import (
@@ -9,6 +11,7 @@ from path_sync._internal.models import (
     parse_sync_metadata,
     pr_already_synced,
 )
+from path_sync._internal.yaml_utils import load_yaml_model
 
 
 def _dest(name: str, include_groups: list[str] | None = None) -> Destination:
@@ -75,6 +78,19 @@ def test_validation_rejects_duplicate_group():
             path_groups={"regions": [PathMapping(src_path="r.txt")]},
             destinations=[_dest("a", include_groups=["regions", "regions"])],
         )
+
+
+def test_null_destinations_loads_as_empty(tmp_path: Path):
+    config_yaml = """
+name: t
+paths:
+  - src_path: a.txt
+destinations:
+"""
+    config_path = tmp_path / "test.src.yaml"
+    config_path.write_text(config_yaml)
+    config = load_yaml_model(config_path, SrcConfig)
+    assert config.destinations == []
 
 
 def test_parse_sync_metadata_from_default_template():
