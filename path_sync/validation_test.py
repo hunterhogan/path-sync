@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from git import Repo
+import pytest
+from git import GitCommandError, Repo
 
 from path_sync._internal import validation
 from path_sync._internal.header import get_header_line
@@ -16,6 +17,16 @@ def _setup_baseline(repo_path, filename: str, content: str) -> None:
     repo.index.add([filename])
     repo.index.commit("baseline")
     repo.create_head("origin/main", repo.head.commit.hexsha)
+
+
+def _setup_baseline_on_remote(repo_path, filename: str, content: str, remote: str) -> None:
+    """Commit content as baseline and create <remote>/main as a remote-tracking ref, with no origin."""
+    repo = Repo(repo_path)
+    (repo_path / filename).write_text(content)
+    repo.index.add([filename])
+    repo.index.commit("baseline")
+    repo.create_remote(remote, "https://example.com/repo.git")
+    repo.git.update_ref(f"refs/remotes/{remote}/main", repo.head.commit.hexsha)
 
 
 def test_modify_ok_edit_passes(tmp_repo):
@@ -105,6 +116,22 @@ def test_no_sections_full_file_comparison(tmp_repo):
 
     result = validation.validate_no_unauthorized_changes(tmp_repo, "main")
     assert result == ["test.py"]
+
+
+def test_remote_other_than_origin(tmp_repo):
+    _setup_baseline_on_remote(tmp_repo, "test.py", f"{HEADER}\noriginal content\n", "upstream")
+
+    (tmp_repo / "test.py").write_text(f"{HEADER}\nmodified content\n")
+
+    result = validation.validate_no_unauthorized_changes(tmp_repo, "main", remote="upstream")
+    assert result == ["test.py"]
+
+
+def test_default_remote_is_origin(tmp_repo):
+    _setup_baseline_on_remote(tmp_repo, "test.py", f"{HEADER}\noriginal content\n", "upstream")
+
+    with pytest.raises(GitCommandError, match="origin/main"):
+        validation.validate_no_unauthorized_changes(tmp_repo, "main")
 
 
 def test_parse_skip_sections():

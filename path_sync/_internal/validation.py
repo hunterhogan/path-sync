@@ -27,6 +27,7 @@ def validate_no_unauthorized_changes(
     repo_root: Path,
     default_branch: str = "main",
     skip_sections: dict[str, set[str]] | None = None,
+    remote: str = "origin",
 ) -> list[str]:
     """Find files with unauthorized changes in DO_NOT_EDIT sections.
 
@@ -34,7 +35,7 @@ def validate_no_unauthorized_changes(
     Missing sections (user opted out) are warned but not treated as errors.
     """
     repo = git_ops.get_repo(repo_root)
-    base_ref = f"origin/{default_branch}"
+    base_ref = f"{remote}/{default_branch}"
     skip = skip_sections or {}
     unauthorized: list[str] = []
 

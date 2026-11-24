@@ -22,6 +22,11 @@ def validate_no_changes(
         help="Branch to compare against (default: main; uses GITHUB_BASE_REF when set and -b not passed)",
         envvar="GITHUB_BASE_REF",
     ),
+    remote: str = typer.Option(
+        "origin",
+        "--remote",
+        help="Git remote that holds the branch to compare against (default: origin)",
+    ),
     skip_sections_opt: str = typer.Option(
         "",
         "--skip-sections",
@@ -47,7 +52,7 @@ def validate_no_changes(
 
     logger.info(f"Validating changes against branch {branch}")
     skip_sections = parse_skip_sections(skip_sections_opt) if skip_sections_opt else None
-    unauthorized = validate_no_unauthorized_changes(repo_root, branch, skip_sections)
+    unauthorized = validate_no_unauthorized_changes(repo_root, branch, skip_sections, remote)
 
     if unauthorized:
         files_list = "\n  ".join(unauthorized)

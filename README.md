@@ -215,6 +215,7 @@ In CI, when the workflow runs on `pull_request`, the comparison branch is the PR
 Options:
 
 - `-b, --branch` - Branch to compare against (default: main). When `GITHUB_BASE_REF` is set (e.g. in GitHub Actions), it overrides the default so CI can use the PR base without passing `-b`. If you set `GITHUB_BASE_REF`, use a non-empty branch name.
+- `--remote` - Git remote that holds the branch to compare against (default: origin). The ref `<remote>/<branch>` must exist locally. Use this option in a clone with no remote named `origin`, such as a fork with remotes `github` and `upstream`.
 - `--skip-sections` - Comma-separated `path:section_id` pairs to skip (e.g., `justfile:coverage`)
 
 ## Usage Scenarios
