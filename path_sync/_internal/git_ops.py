@@ -322,7 +322,7 @@ def get_changed_files(repo: Repo, base_ref: str = "HEAD") -> list[Path]:
 
 
 def get_file_content_at_ref(repo: Repo, file_path: Path, ref: str) -> str | None:
-    rel_path = str(file_path.relative_to(repo.working_dir))
+    rel_path = file_path.relative_to(repo.working_dir).as_posix()
     with suppress(GitCommandError):
         return repo.git.show(f"{ref}:{rel_path}")
     return None

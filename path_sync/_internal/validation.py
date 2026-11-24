@@ -44,7 +44,7 @@ def validate_no_unauthorized_changes(
         if not header.file_has_header(path):
             continue
 
-        rel_path = str(path.relative_to(repo_root))
+        rel_path = path.relative_to(repo_root).as_posix()
         current_content = path.read_text()
         baseline_content = git_ops.get_file_content_at_ref(repo, path, base_ref)
 

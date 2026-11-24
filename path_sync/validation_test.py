@@ -79,6 +79,49 @@ MODIFIED
     assert result == []
 
 
+def _setup_nested_baseline(repo_path, filename: str, content: str) -> None:
+    """Commit content under a subfolder as baseline on main and create origin/main ref.
+
+    Writes bytes so the file keeps LF line endings on Windows too.
+    """
+    repo = Repo(repo_path)
+    file_path = repo_path / filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(content.encode())
+    repo.index.add([filename])
+    repo.index.commit("baseline")
+    repo.create_head("origin/main", repo.head.commit.hexsha)
+
+
+def test_modify_do_not_edit_nested_fails(tmp_repo):
+    baseline = f"""{HEADER}
+# === DO_NOT_EDIT: path-sync standard ===
+protected content
+# === OK_EDIT: path-sync standard ===
+"""
+    _setup_nested_baseline(tmp_repo, "sub/dir/test.py", baseline)
+    (tmp_repo / "sub" / "dir" / "test.py").write_bytes(baseline.replace("protected", "MODIFIED protected").encode())
+
+    result = validation.validate_no_unauthorized_changes(tmp_repo, "main")
+    assert result == ["sub/dir/test.py:standard"]
+
+
+def test_skip_section_nested_passes(tmp_repo):
+    baseline = f"""{HEADER}
+# === DO_NOT_EDIT: path-sync coverage ===
+protected
+# === OK_EDIT: path-sync coverage ===
+"""
+    _setup_nested_baseline(tmp_repo, "sub/dir/test.py", baseline)
+    (tmp_repo / "sub" / "dir" / "test.py").write_bytes(baseline.replace("protected", "MODIFIED").encode())
+
+    assert validation.validate_no_unauthorized_changes(tmp_repo, "main") == ["sub/dir/test.py:coverage"]
+
+    skip_sections = {"sub/dir/test.py": {"coverage"}}
+    result = validation.validate_no_unauthorized_changes(tmp_repo, "main", skip_sections=skip_sections)
+    assert result == []
+
+
 def test_section_removed_warns_not_fails(tmp_repo, caplog):
     baseline = f"""{HEADER}
 # === DO_NOT_EDIT: path-sync standard ===

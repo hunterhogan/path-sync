@@ -125,6 +125,13 @@ def test_file_content_at_commit(tmp_repo):
     assert git_ops.file_content_at_commit(repo, sha, "absent.txt") is None
 
 
+def test_get_file_content_at_ref_nested_file(tmp_repo):
+    repo = git_ops.get_repo(tmp_repo)
+    _commit_file(repo, tmp_repo, "sub/dir/nested.txt", "hello")
+    assert git_ops.get_file_content_at_ref(repo, tmp_repo / "sub" / "dir" / "nested.txt", "HEAD") == "hello"
+    assert git_ops.get_file_content_at_ref(repo, tmp_repo / "sub" / "dir" / "absent.txt", "HEAD") is None
+
+
 def test_truncate_body_short_unchanged():
     body = "short body"
     assert _truncate_body(body) == body
