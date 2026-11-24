@@ -9,6 +9,7 @@ from path_sync._internal.cmd_copy import (
     CopyOptions,
     _cleanup_orphans,
     _close_stale_pr,
+    _iter_sync_files,
     _print_dest_only_hint,
     _skip_already_synced,
     _sync_path,
@@ -306,6 +307,49 @@ skip this
     result = (dest_root / "file.sh").read_text()
     assert "keep this" in result
     assert "skipped" not in result
+    assert "skip this" not in result
+
+
+def test_iter_sync_files_dest_keys_use_forward_slashes(tmp_path):
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    (src_root / "rules/nested").mkdir(parents=True)
+    dest_root.mkdir()
+    (src_root / "rules/nested/a.md").write_text("a")
+    (src_root / "rules/b.md").write_text("b")
+
+    dir_mapping = PathMapping(src_path="rules", dest_path="out/rules")
+    glob_mapping = PathMapping(src_path="rules/**/*.md", dest_path="out/globbed")
+    dir_keys = {key for _, key, _ in _iter_sync_files(dir_mapping, src_root, dest_root)}
+    glob_keys = {key for _, key, _ in _iter_sync_files(glob_mapping, src_root, dest_root)}
+
+    assert dir_keys == {"out/rules/b.md", "out/rules/nested/a.md"}
+    assert glob_keys == {"out/globbed/b.md", "out/globbed/nested/a.md"}
+
+
+def test_sync_nested_file_respects_skip_sections(tmp_path):
+    """skip_sections keys are forward-slash dest paths, also for files found inside a directory mapping."""
+    src_root = tmp_path / "src"
+    dest_root = tmp_path / "dest"
+    (src_root / "rules/nested").mkdir(parents=True)
+    dest_root.mkdir()
+
+    src_content = """\
+# === DO_NOT_EDIT: path-sync included ===
+keep this
+# === OK_EDIT: path-sync included ===
+# === DO_NOT_EDIT: path-sync skipped ===
+skip this
+# === OK_EDIT: path-sync skipped ==="""
+    (src_root / "rules/nested/file.sh").write_text(src_content)
+
+    dest = _make_dest(skip_sections={"rules/nested/file.sh": ["skipped"]})
+    mapping = PathMapping(src_path="rules")
+    changes, _ = _sync_path(mapping, src_root, dest_root, dest, CONFIG_NAME, False, False)
+
+    assert changes == 1
+    result = (dest_root / "rules/nested/file.sh").read_text()
+    assert "keep this" in result
     assert "skip this" not in result
 
 

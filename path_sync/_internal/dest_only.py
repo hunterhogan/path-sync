@@ -62,7 +62,7 @@ def _src_for_dest_file(
     dest_anchor = dest_root / dest_base
     if dest_path.is_relative_to(dest_anchor):
         rel = dest_path.relative_to(dest_anchor)
-        return _DestFileMap(src_root / src_base / rel, str(Path(dest_base) / rel))
+        return _DestFileMap(src_root / src_base / rel, (Path(dest_base) / rel).as_posix())
     return None
 
 
